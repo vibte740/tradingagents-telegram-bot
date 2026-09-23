@@ -8,7 +8,7 @@ you:  BTC-USD
 bot:  🔍 Analyzing BTC-USD on 2026-09-23…
 bot:  📊 BTC-USD · 2026-09-23
       Signal: Hold
-      via openai_compatible (muse-spark/muse-spark)
+      via OpenRouter (deepseek/deepseek-chat-v3-0324/qwen/qwen3-coder)
       <portfolio decision…>
 ```
 
@@ -56,13 +56,20 @@ See `.env.example`. Essentials:
 - LLM comes from the standard `TRADINGAGENTS_*` config (provider, models,
   backend URL).
 
-## Primary / fallback LLMs
+## Primary / secondary LLMs
 
-Before each run the bot probes the primary backend (`/v1/models`). If it's
-down it switches to **OpenRouter** (`OPENROUTER_API_KEY`):
+Before each run the bot probes **OpenRouter** (`/api/v1/models`). If it's
+reachable it uses it (it normalizes every provider to clean OpenAI
+tool-call format — 9router combos occasionally pass through malformed
+shapes that crash LangChain parsing):
 
-- `TRADINGAGENTS_TG_FALLBACK_DEEP` (default `nvidia/nemotron-3-ultra-550b-a55b:free`)
-- `TRADINGAGENTS_TG_FALLBACK_QUICK` (default `poolside/laguna-s-2.1:free`)
+- `TRADINGAGENTS_TG_PRIMARY_DEEP` (default `deepseek/deepseek-chat-v3-0324`)
+- `TRADINGAGENTS_TG_PRIMARY_QUICK` (default `qwen/qwen3-coder`)
+
+Secondary is the standard `TRADINGAGENTS_*` backend (9router). Note the
+`:free` tier caps at 50 req/day — not enough for full multi-agent runs —
+so primaries are cheap paid IDs. `TRADINGAGENTS_MAX_TOKENS=8192` bounds
+per-call reservations.
 
 The reply states which route was used, and every run is logged.
 

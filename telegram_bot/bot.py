@@ -178,13 +178,20 @@ def primary_up(backend_url: str, api_key: str) -> bool:
 
 
 def resolve_llm() -> tuple[str, str, str, str, bool]:
-    """Return (provider, backend_url, deep, quick, via_fallback).
+    """Return (provider, backend_url, deep, quick, via_secondary).
 
-    When the configured primary backend is unreachable, switch to OpenRouter
-    (:free models). Raises RuntimeError if fallback is needed but unusable.
+    Primary is OpenRouter (normalizes every provider to clean OpenAI
+    tool-call format). Secondary is the configured TRADINGAGENTS_* backend
+    (9router combos can return non-standard shapes). Raises RuntimeError
+    if neither is usable.
     """
     from tradingagents.default_config import DEFAULT_CONFIG
 
+    or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    pr_deep = os.environ.get("TRADINGAGENTS_TG_PRIMARY_DEEP", "").strip()
+    pr_quick = os.environ.get("TRADINGAGENTS_TG_PRIMARY_QUICK", "").strip()
+    if or_key and pr_deep and pr_quick and primary_up(OPENROUTER_URL, or_key):
+        return "openrouter", OPENROUTER_URL, pr_deep, pr_quick, False
     provider = str(DEFAULT_CONFIG.get("llm_provider", "openai_compatible"))
     backend = str(DEFAULT_CONFIG.get("backend_url") or "")
     deep = str(DEFAULT_CONFIG.get("deep_think_llm", ""))
@@ -192,19 +199,8 @@ def resolve_llm() -> tuple[str, str, str, str, bool]:
     if backend:
         key = os.environ.get("OPENAI_COMPATIBLE_API_KEY", "")
         if primary_up(backend, key):
-            return provider, backend, deep, quick, False
-        fb_deep = os.environ.get("TRADINGAGENTS_TG_FALLBACK_DEEP", "").strip()
-        fb_quick = os.environ.get("TRADINGAGENTS_TG_FALLBACK_QUICK", "").strip()
-        or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-        if not or_key:
-            raise RuntimeError("primary LLM backend is down and OPENROUTER_API_KEY is not set")
-        if not fb_deep or not fb_quick:
-            raise RuntimeError(
-                "primary LLM backend is down and fallback models "
-                "(TRADINGAGENTS_TG_FALLBACK_DEEP/QUICK) are not set"
-            )
-        return "openrouter", OPENROUTER_URL, fb_deep, fb_quick, True
-    return provider, backend, deep, quick, False
+            return provider, backend, deep, quick, True
+    raise RuntimeError("no LLM backend reachable (OpenRouter and 9router both down)")
 
 
 def run_analysis(ticker: str, date: str) -> dict:
@@ -213,7 +209,7 @@ def run_analysis(ticker: str, date: str) -> dict:
     from tradingagents.reporting import write_report_tree
     from pathlib import Path
 
-    provider, backend, deep, quick, via_fallback = resolve_llm()
+    provider, backend, deep, quick, via_secondary = resolve_llm()
     config = DEFAULT_CONFIG.copy()
     config["llm_provider"] = provider
     config["backend_url"] = backend or None
@@ -241,7 +237,7 @@ def run_analysis(ticker: str, date: str) -> dict:
         "report_path": str(report_path),
         "provider": str(config.get("llm_provider", "")),
         "analysts": ",".join(analysts),
-        "via_fallback": via_fallback,
+        "via_secondary": via_secondary,
         "models": f"{deep}/{quick}",
     }
 
@@ -258,7 +254,7 @@ def log_result(res: dict) -> None:
                 "--date", res["date"],
                 "--decision", MAP_TO_NOTION.get(res["signal"], "Hold"),
                 "--summary", f"[{res['signal']}] {summary}",
-                "--provider", f"telegram-bot:{res['provider']}{':fallback' if res['via_fallback'] else ''}:{res['models']}",
+                "--provider", f"telegram-bot:{res['provider']}{':9router-secondary' if res['via_secondary'] else ''}:{res['models']}",
                 "--analysts", res["analysts"],
                 "--report-path", res["report_path"],
             ],
@@ -286,9 +282,9 @@ def worker() -> None:
             if len(excerpt) > 3200:
                 excerpt = excerpt[:3200] + "\n…(truncated, full report on disk)"
             route = (
-                f"via OpenRouter fallback ({res['models']}) — primary was down"
-                if res["via_fallback"]
-                else f"via {res['provider']} ({res['models']})"
+                f"via 9router secondary ({res['models']}) — OpenRouter was down"
+                if res["via_secondary"]
+                else f"via OpenRouter ({res['models']})"
             )
             send_message(
                 chat_id,
@@ -297,6 +293,9 @@ def worker() -> None:
             )
             log_result(res)
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
             try:
                 send_message(chat_id, f"⚠️ Analysis of {ticker} failed: {str(e)[:400]}")
             except Exception:
