@@ -161,6 +161,22 @@ def is_crypto(ticker: str) -> bool:
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
+# Key env per primary URL (OpenRouter key for openrouter.ai, OmniRoute key
+# for the local gateway, compatible key for anything else).
+PRIMARY_KEY_ENV = (
+    ("openrouter.ai", "OPENROUTER_API_KEY"),
+    ("188.132.174.62:3000", "OMNIROUTE_API_KEY"),
+    ("127.0.0.1:3000", "OMNIROUTE_API_KEY"),
+    ("localhost:3000", "OMNIROUTE_API_KEY"),
+)
+
+
+def primary_key_for(url: str) -> str:
+    for marker, env_name in PRIMARY_KEY_ENV:
+        if marker in url:
+            return os.environ.get(env_name, "").strip()
+    return os.environ.get("OPENAI_COMPATIBLE_API_KEY", "").strip()
+
 
 def primary_up(backend_url: str, api_key: str) -> bool:
     """Probe the primary OpenAI-compatible backend; False = use fallback."""
@@ -180,19 +196,21 @@ def primary_up(backend_url: str, api_key: str) -> bool:
 def resolve_llm(prefer_secondary: bool = False) -> tuple[str, str, str, str, bool]:
     """Return (provider, backend_url, deep, quick, via_secondary).
 
-    Primary is OpenRouter (normalizes every provider to clean OpenAI
-    tool-call format). Secondary is the configured TRADINGAGENTS_* backend
-    (9router combos can return non-standard shapes). Raises RuntimeError
-    if neither is usable.
+    Primary defaults to OpenRouter (normalizes every provider to clean
+    OpenAI tool-call format); point TRADINGAGENTS_TG_PRIMARY_URL at the
+    local OmniRoute gateway to use it instead. Secondary is the configured
+    TRADINGAGENTS_* backend. Raises RuntimeError if neither is usable.
     """
     from tradingagents.default_config import DEFAULT_CONFIG
 
     if not prefer_secondary:
-        or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        purl = os.environ.get("TRADINGAGENTS_TG_PRIMARY_URL", "").strip() or OPENROUTER_URL
+        pkey = primary_key_for(purl)
         pr_deep = os.environ.get("TRADINGAGENTS_TG_PRIMARY_DEEP", "").strip()
         pr_quick = os.environ.get("TRADINGAGENTS_TG_PRIMARY_QUICK", "").strip()
-        if or_key and pr_deep and pr_quick and primary_up(OPENROUTER_URL, or_key):
-            return "openrouter", OPENROUTER_URL, pr_deep, pr_quick, False
+        pprovider = "openrouter" if "openrouter.ai" in purl else "omniroute"
+        if pkey and pr_deep and pr_quick and primary_up(purl, pkey):
+            return pprovider, purl, pr_deep, pr_quick, False
     provider = str(DEFAULT_CONFIG.get("llm_provider", "openai_compatible"))
     backend = str(DEFAULT_CONFIG.get("backend_url") or "")
     deep = str(DEFAULT_CONFIG.get("deep_think_llm", ""))
@@ -255,7 +273,7 @@ def log_result(res: dict) -> None:
                 "--date", res["date"],
                 "--decision", MAP_TO_NOTION.get(res["signal"], "Hold"),
                 "--summary", f"[{res['signal']}] {summary}",
-                "--provider", f"telegram-bot:{res['provider']}{':9router-secondary' if res['via_secondary'] else ''}:{res['models']}",
+                "--provider", f"telegram-bot:{res['provider']}{':secondary' if res['via_secondary'] else ''}:{res['models']}",
                 "--analysts", res["analysts"],
                 "--report-path", res["report_path"],
             ],
@@ -302,9 +320,9 @@ def worker() -> None:
             if len(excerpt) > 3200:
                 excerpt = excerpt[:3200] + "\n…(truncated, full report on disk)"
             route = (
-                f"via 9router secondary ({res['models']}) — OpenRouter was down"
+                f"via {res['provider']} secondary ({res['models']}) — primary was down"
                 if res["via_secondary"]
-                else f"via OpenRouter ({res['models']})"
+                else f"via {res['provider']} ({res['models']})"
             )
             send_message(
                 chat_id,

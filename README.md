@@ -58,10 +58,11 @@ See `.env.example`. Essentials:
 
 ## Primary / secondary LLMs
 
-Before each run the bot probes **OpenRouter** (`/api/v1/models`). If it's
-reachable it uses it (it normalizes every provider to clean OpenAI
-tool-call format — 9router combos occasionally pass through malformed
-shapes that crash LangChain parsing):
+Before each run the bot probes the primary URL (`TRADINGAGENTS_TG_PRIMARY_URL`,
+default OpenRouter — it normalizes every provider to clean OpenAI tool-call
+format). Point it at a local **OmniRoute** gateway
+(`http://<host>:3000/v1` + `OMNIROUTE_API_KEY`, models like `auto/best-coding`)
+to use OmniRoute as the default:
 
 - `TRADINGAGENTS_TG_PRIMARY_DEEP` (default `deepseek/deepseek-chat-v3-0324`)
 - `TRADINGAGENTS_TG_PRIMARY_QUICK` (default `qwen/qwen3-coder`)
