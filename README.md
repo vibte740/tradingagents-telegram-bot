@@ -71,6 +71,9 @@ Secondary is the standard `TRADINGAGENTS_*` backend (9router). Note the
 so primaries are cheap paid IDs. `TRADINGAGENTS_MAX_TOKENS=8192` bounds
 per-call reservations.
 
+If a run fails on OpenRouter with a credit/rate error (402/429), the bot
+automatically retries once via the 9router secondary and says so in chat.
+
 The reply states which route was used, and every run is logged.
 
 ## Result logging

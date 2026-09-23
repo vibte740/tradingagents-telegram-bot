@@ -177,7 +177,7 @@ def primary_up(backend_url: str, api_key: str) -> bool:
         return False
 
 
-def resolve_llm() -> tuple[str, str, str, str, bool]:
+def resolve_llm(prefer_secondary: bool = False) -> tuple[str, str, str, str, bool]:
     """Return (provider, backend_url, deep, quick, via_secondary).
 
     Primary is OpenRouter (normalizes every provider to clean OpenAI
@@ -187,11 +187,12 @@ def resolve_llm() -> tuple[str, str, str, str, bool]:
     """
     from tradingagents.default_config import DEFAULT_CONFIG
 
-    or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    pr_deep = os.environ.get("TRADINGAGENTS_TG_PRIMARY_DEEP", "").strip()
-    pr_quick = os.environ.get("TRADINGAGENTS_TG_PRIMARY_QUICK", "").strip()
-    if or_key and pr_deep and pr_quick and primary_up(OPENROUTER_URL, or_key):
-        return "openrouter", OPENROUTER_URL, pr_deep, pr_quick, False
+    if not prefer_secondary:
+        or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        pr_deep = os.environ.get("TRADINGAGENTS_TG_PRIMARY_DEEP", "").strip()
+        pr_quick = os.environ.get("TRADINGAGENTS_TG_PRIMARY_QUICK", "").strip()
+        if or_key and pr_deep and pr_quick and primary_up(OPENROUTER_URL, or_key):
+            return "openrouter", OPENROUTER_URL, pr_deep, pr_quick, False
     provider = str(DEFAULT_CONFIG.get("llm_provider", "openai_compatible"))
     backend = str(DEFAULT_CONFIG.get("backend_url") or "")
     deep = str(DEFAULT_CONFIG.get("deep_think_llm", ""))
@@ -203,13 +204,13 @@ def resolve_llm() -> tuple[str, str, str, str, bool]:
     raise RuntimeError("no LLM backend reachable (OpenRouter and 9router both down)")
 
 
-def run_analysis(ticker: str, date: str) -> dict:
+def run_analysis(ticker: str, date: str, prefer_secondary: bool = False) -> dict:
     from tradingagents.default_config import DEFAULT_CONFIG
     from tradingagents.graph.trading_graph import TradingAgentsGraph
     from tradingagents.reporting import write_report_tree
     from pathlib import Path
 
-    provider, backend, deep, quick, via_secondary = resolve_llm()
+    provider, backend, deep, quick, via_secondary = resolve_llm(prefer_secondary)
     config = DEFAULT_CONFIG.copy()
     config["llm_provider"] = provider
     config["backend_url"] = backend or None
@@ -267,6 +268,14 @@ def log_result(res: dict) -> None:
 
 # ---------- Worker ----------
 
+CREDIT_ERROR_HINTS = ("402", "429", "more credits", "rate limit", "rate-limit")
+
+
+def _is_credit_error(e: Exception) -> bool:
+    text = str(e).lower()
+    return any(h in text for h in CREDIT_ERROR_HINTS)
+
+
 work_q: queue.Queue = queue.Queue()
 worker_busy = threading.Event()
 
@@ -277,7 +286,18 @@ def worker() -> None:
         worker_busy.set()
         try:
             send_message(chat_id, f"▶️ Starting {ticker} ({date})…")
-            res = run_analysis(ticker, date)
+            try:
+                res = run_analysis(ticker, date)
+            except Exception as e:
+                if not _is_credit_error(e):
+                    raise
+                send_message(
+                    chat_id,
+                    "⛽ OpenRouter is out of credits/rate-limited "
+                    "(top up at openrouter.ai/settings/credits) — "
+                    "retrying via 9router secondary…",
+                )
+                res = run_analysis(ticker, date, prefer_secondary=True)
             excerpt = res["decision_text"]
             if len(excerpt) > 3200:
                 excerpt = excerpt[:3200] + "\n…(truncated, full report on disk)"
